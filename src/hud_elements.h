@@ -36,6 +36,7 @@ class HudElements{
         int place;
         int text_column = 1;
         int table_columns_count = 0;
+        float horizontal_content_right = 0.0f;
         pid_t g_gamescopePid = -1;
         int g_fsrUpscale = -1;
         int g_fsrSharpness = -1;
@@ -101,6 +102,7 @@ class HudElements{
         static void _exec();
         static void battery();
         static void fps_only();
+        static void base_fps();
         static void gamescope_fsr();
         static void gamescope_frame_timing();
         static void device_battery();

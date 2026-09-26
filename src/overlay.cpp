@@ -334,7 +334,9 @@ void overlay_new_frame(const struct overlay_params& params)
 {
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(4,4));
-   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8,-3));
+   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                       ImVec2(params.enabled[OVERLAY_PARAM_ENABLED_horizontal] &&
+                              !params.enabled[OVERLAY_PARAM_ENABLED_horizontal_stretch] ? 4.0f : 8.0f, -3));
    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, params.alpha);
    if (!params.enabled[OVERLAY_PARAM_ENABLED_hud_compact]){
       ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5,5));
@@ -358,7 +360,9 @@ void position_layer(struct swapchain_stats& data, const struct overlay_params& p
    if (real_params->offset_x > 0 || real_params->offset_y > 0 || real_params->enabled[OVERLAY_PARAM_ENABLED_hud_no_margin])
       margin = 0.0f;
 
-   ImGui::SetNextWindowBgAlpha(real_params->background_alpha);
+   const bool fitted_background = real_params->enabled[OVERLAY_PARAM_ENABLED_horizontal] &&
+                                  !real_params->enabled[OVERLAY_PARAM_ENABLED_horizontal_stretch];
+   ImGui::SetNextWindowBgAlpha(fitted_background ? 0.0f : real_params->background_alpha);
    ImGui::SetNextWindowSize(window_size, ImGuiCond_Always);
    switch (real_params->position) {
    case LAYER_POSITION_TOP_LEFT:
@@ -417,6 +421,9 @@ void RenderOutlinedText(const char* text, ImU32 textColor) {
    ImVec2 textSize = ImGui::CalcTextSize(text);
    ImU32 outlineColor = ImGui::ColorConvertFloat4ToU32(HUDElements.colors.text_outline);
    ImVec2 pos = window->DC.CursorPos;
+   if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_horizontal])
+      HUDElements.horizontal_content_right = std::max(
+         HUDElements.horizontal_content_right, pos.x + textSize.x);
 
    ImDrawList* drawList = ImGui::GetWindowDrawList();
 
@@ -696,29 +703,54 @@ void render_imgui(swapchain_stats& data, struct overlay_params& params, ImVec2& 
 
    if (!real_params->no_display && !steam_focused && get_params()->table_columns){
       ImGui::Begin("Main", &gui_open, ImGuiWindowFlags_NoDecoration);
+      HUDElements.horizontal_content_right = ImGui::GetWindowPos().x;
       if (ImGui::BeginTable("hud", real_params->table_columns, table_flags )) {
-         HUDElements.place = 0;
-         for (auto& func : HUDElements.ordered_functions){
+         for (size_t i = 0; i < HUDElements.ordered_functions.size(); ++i){
+            auto& func = HUDElements.ordered_functions[i];
+            if (func.name == "base_fps" && !data.fg_active)
+               continue;
+            HUDElements.place = static_cast<int>(i);
             if(!real_params->enabled[OVERLAY_PARAM_ENABLED_horizontal] && func.name != "exec")
                ImGui::TableNextRow();
             func.run();
-            HUDElements.place += 1;
-            if(!HUDElements.ordered_functions.empty() && real_params->enabled[OVERLAY_PARAM_ENABLED_horizontal] && HUDElements.ordered_functions.size() != (size_t)HUDElements.place)
-               horizontal_separator(params);
+            if (real_params->enabled[OVERLAY_PARAM_ENABLED_horizontal]) {
+               bool more_visible_elements = false;
+               for (size_t j = i + 1; j < HUDElements.ordered_functions.size(); ++j) {
+                  if (HUDElements.ordered_functions[j].name != "base_fps" || data.fg_active) {
+                     more_visible_elements = true;
+                     break;
+                  }
+               }
+               if (more_visible_elements)
+                  horizontal_separator(params);
+            }
          }
 
          if (real_params->enabled[OVERLAY_PARAM_ENABLED_horizontal]) {
             if (HUDElements.table_columns_count > 0 && HUDElements.table_columns_count < 65 )
                real_params->table_columns = HUDElements.table_columns_count;
-            if(!real_params->enabled[OVERLAY_PARAM_ENABLED_horizontal_stretch]) {
-               float content_width = ImGui::GetContentRegionAvail().x - (real_params->table_columns * 64);
-               window_size = ImVec2(content_width, real_params->height);
-            }
          }
          ImGui::EndTable();
          HUDElements.table_columns_count = 0;
       }
 
+      if (real_params->enabled[OVERLAY_PARAM_ENABLED_horizontal] &&
+          !real_params->enabled[OVERLAY_PARAM_ENABLED_horizontal_stretch]) {
+         const ImVec2 pos = ImGui::GetWindowPos();
+         if (HUDElements.horizontal_content_right > pos.x) {
+            ImVec4 bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+            bg.w = real_params->background_alpha;
+            // Keep the strip bounded if an extension renders content outside
+            // the expected table columns. The default profile fits well inside
+            // this limit at ultrawide resolutions.
+            const float max_right = pos.x + std::min(1700.0f, io.DisplaySize.x * 0.8f);
+            ImGui::GetBackgroundDrawList()->AddRectFilled(
+               pos, ImVec2(std::min(HUDElements.horizontal_content_right + 8.0f,
+                                    max_right),
+                           pos.y + ImGui::GetWindowSize().y),
+               ImGui::GetColorU32(bg), real_params->round_corners);
+         }
+      }
       if(logger->is_active())
          ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(data.main_window_pos.x + window_size.x - 15, data.main_window_pos.y + 15), 10, real_params->engine_color, 20);
       window_size = ImVec2(window_size.x, ImGui::GetCursorPosY() + 11.0f);

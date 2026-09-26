@@ -647,11 +647,22 @@ void HudElements::vram(){
                 HUDElements.TextColored(HUDElements.colors.vram, gpu->vram_text().c_str());
 
                 ImguiNextColumnOrNewRow();
-                // Add gtt_used to vram usage for APUs
-                if (gpu->is_apu())
-                    right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%.1f", gpu->metrics.sys_vram_used + gpu->metrics.gtt_used);
+                // The total is unavailable on some drivers; show it only when reported.
+                // The reported total is local VRAM; do not mix GTT into its
+                // numerator on APUs when showing a used/total pair.
+                const float used = gpu->metrics.sys_vram_used +
+                    (gpu->is_apu() &&
+                     !HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_memory_totals]
+                         ? gpu->metrics.gtt_used : 0.0f);
+                if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_memory_totals] &&
+                    gpu->metrics.memoryTotal > 0.0f)
+                    HUDElements.TextColored(HUDElements.colors.text, "%.1f/%.1f", used,
+                                            gpu->metrics.memoryTotal);
+                else if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_memory_totals])
+                    HUDElements.TextColored(HUDElements.colors.text, "%.1f", used);
                 else
-                    right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%.1f", gpu->metrics.sys_vram_used);
+                    right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width,
+                                       "%.1f", used);
                 if (!HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_hud_compact]){
                     ImGui::SameLine(0,1.0f);
                     ImGui::PushFont(HUDElements.sw_stats->font_small);
@@ -760,7 +771,10 @@ void HudElements::ram(){
 
     if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_ram]) {
         ImguiNextColumnOrNewRow();
-        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%.1f", memused);
+        if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_memory_totals])
+            HUDElements.TextColored(HUDElements.colors.text, "%.1f/%.1f", memused, memmax);
+        else
+            right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%.1f", memused);
         if (!HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_hud_compact]){
             ImGui::SameLine(0, 1.0f);
             ImGui::PushFont(HUDElements.sw_stats->font_small);
@@ -835,7 +849,8 @@ void HudElements::procmem()
 void HudElements::fps(){
     if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_fps] && !HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_fps_only]){
         ImguiNextColumnFirstItem();
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", engine_name(*HUDElements.sw_stats));
+        HUDElements.TextColored(HUDElements.colors.engine, "%s",
+                                HUDElements.sw_stats->fg_active ? "FG" : engine_name(*HUDElements.sw_stats));
 
         ImguiNextColumnOrNewRow();
         if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_fps_color_change]){
@@ -858,7 +873,8 @@ void HudElements::fps(){
         bool horizontal_fps_label = HUDElements.params->fps_text.empty() &&
                                     HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_horizontal] &&
                                     !HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_engine_short_names];
-        if(!HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_hide_fps_superscript] && !horizontal_fps_label){
+        if(!HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_hide_fps_superscript] &&
+           !horizontal_fps_label && !HUDElements.sw_stats->fg_active){
             ImGui::PushFont(HUDElements.sw_stats->font_small);
             HUDElements.TextColored(HUDElements.colors.text, "FPS");
             ImGui::PopFont();
@@ -875,6 +891,20 @@ void HudElements::fps(){
         ImguiNextColumnOrNewRow();
         HUDElements.TextColored(HUDElements.colors.engine, "%s", HUDElements.sw_stats->engineName.c_str());
     }
+}
+
+void HudElements::base_fps(){
+    if (!HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_base_fps])
+        return;
+
+    ImguiNextColumnFirstItem();
+    HUDElements.TextColored(HUDElements.colors.engine, "FPS");
+    ImguiNextColumnOrNewRow();
+    if (HUDElements.sw_stats->base_fps > 0.0)
+        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width,
+                           "%.0f", HUDElements.sw_stats->base_fps);
+    else
+        right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "N/A");
 }
 
 void HudElements::fps_only(){
@@ -996,7 +1026,7 @@ void HudElements::frame_timing(){
         double max_time = 50.0f;
         float width, height = 0;
         if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_horizontal]){
-            width = 150;
+            width = HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_horizontal_stretch] ? 150 : 105;
             height = HUDElements.params->font_size * 0.85;
         } else {
             width = (ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x);
@@ -1011,6 +1041,9 @@ void HudElements::frame_timing(){
             height = 125;
         }
 
+        if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_horizontal])
+            HUDElements.horizontal_content_right = std::max(
+                HUDElements.horizontal_content_right, ImGui::GetCursorScreenPos().x + width);
         if (ImGui::BeginChild("my_child_window", ImVec2(width, height), false, ImGuiWindowFlags_NoDecoration)) {
             if (HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_histogram]){
                 ImGui::PlotHistogram(hash, get_time_stat, HUDElements.sw_stats,
@@ -1653,7 +1686,9 @@ void HudElements::fps_metrics(){
             ImGui::TableNextRow();
 
         ImguiNextColumnFirstItem();
-        HUDElements.TextColored(HUDElements.colors.engine, "%s", metric.display_name.c_str());
+        HUDElements.TextColored(HUDElements.colors.engine, "%s",
+                                HUDElements.params->enabled[OVERLAY_PARAM_ENABLED_base_fps] &&
+                                metric.name == "0.01" ? "LOW" : metric.display_name.c_str());
         ImguiNextColumnOrNewRow();
         right_aligned_text(HUDElements.colors.text, HUDElements.ralign_width, "%.0f", metric.value);
         ImGui::SameLine(0, 1.0f);
@@ -1981,6 +2016,7 @@ void HudElements::sort_elements(const std::pair<std::string, std::string>& optio
         {"proc_vram", {proc_vram}},
         {"ram", {ram}},
         {"fps", {fps}},
+        {"base_fps", {base_fps}},
         {"gpu_name", {gpu_name}},
         {"frame_timing", {frame_timing}},
         {"media_player", {media_player}},
@@ -2082,6 +2118,8 @@ void HudElements::legacy_elements(const overlay_params* temp_params){
         ordered_functions.push_back({throttling_status, "throttling_status", value});
     if (temp_params->enabled[OVERLAY_PARAM_ENABLED_fps])
         ordered_functions.push_back({fps, "fps", value});
+    if (temp_params->enabled[OVERLAY_PARAM_ENABLED_base_fps])
+        ordered_functions.push_back({base_fps, "base_fps", value});
     for (const auto& pair : options) {
         if (pair.first.find("graphs") != std::string::npos) {
             std::stringstream ss(pair.second);

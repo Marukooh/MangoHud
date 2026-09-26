@@ -856,6 +856,7 @@ static void set_param_defaults(struct overlay_params *params){
    params->enabled[OVERLAY_PARAM_ENABLED_cpu_stats] = true;
    params->enabled[OVERLAY_PARAM_ENABLED_gpu_stats] = true;
    params->enabled[OVERLAY_PARAM_ENABLED_ram] = false;
+   params->enabled[OVERLAY_PARAM_ENABLED_memory_totals] = false;
    params->enabled[OVERLAY_PARAM_ENABLED_ram_temp] = false;
    params->enabled[OVERLAY_PARAM_ENABLED_swap] = false;
    params->enabled[OVERLAY_PARAM_ENABLED_vram] = false;
