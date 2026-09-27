@@ -22,7 +22,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Install build tools
-        run: pacman -Syu --noconfirm base-devel git github-cli sudo namcap
+        shell: bash
+        run: |
+          printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
+          pacman -Syu --noconfirm base-devel git github-cli sudo namcap
 
       - uses: actions/checkout@v4
 
