@@ -1,0 +1,46 @@
+# Maintainer: Marukooh <https://github.com/Marukooh>
+
+pkgname=mangohud-marukooh-bin
+pkgver=0.8.4.marukooh.1
+pkgrel=1
+pkgdesc='MangoHud fork with automatic frame generation counters and a compact HUD profile'
+arch=('x86_64')
+url='https://github.com/Marukooh/MangoHud'
+license=('MIT' 'BSD-3-Clause')
+depends=(
+  'dbus' 'hicolor-icon-theme' 'libcap' 'libglvnd' 'libx11' 'libxkbcommon'
+  'python' 'python-matplotlib' 'python-numpy' 'vulkan-icd-loader' 'wayland'
+  'lib32-dbus' 'lib32-gcc-libs' 'lib32-glew' 'lib32-libx11'
+  'lib32-libxkbcommon' 'lib32-vulkan-icd-loader' 'lib32-wayland'
+)
+provides=('mangohud' 'lib32-mangohud')
+conflicts=('mangohud' 'lib32-mangohud')
+backup=('etc/MangoHud.conf')
+_tag="v${pkgver/.marukooh./-marukooh.}"
+source=("MangoHud-${_tag}-linux-x86_64-i686.tar.gz::${url}/releases/download/${_tag}/MangoHud-${_tag}-linux-x86_64-i686.tar.gz")
+sha256sums=('04de3ca07a971b48467c7c808a95a821649b0fae72936d9a8aa798abda355942')
+
+package() {
+  cp -r "${srcdir}/usr" "${pkgdir}/"
+
+  # The release archive uses a distribution-neutral layout. Arch's $LIB token
+  # resolves to lib or lib32, so place the OpenGL shim and Vulkan layer there.
+  install -d "${pkgdir}/usr/lib32/mangohud"
+  mv "${pkgdir}/usr/lib/mangohud/lib64/"* "${pkgdir}/usr/lib/mangohud/"
+  mv "${pkgdir}/usr/lib/mangohud/lib32/"* "${pkgdir}/usr/lib32/mangohud/"
+  rmdir "${pkgdir}/usr/lib/mangohud/lib64" "${pkgdir}/usr/lib/mangohud/lib32"
+
+  sed -i 's|/usr/\\$LIB/libMangoHud_shim.so|/usr/\\$LIB/mangohud/libMangoHud_shim.so|' \
+    "${pkgdir}/usr/bin/mangohud"
+  sed -i 's|/usr/lib/mangohud/lib64/|/usr/lib/mangohud/|' \
+    "${pkgdir}/usr/share/vulkan/implicit_layer.d/MangoHud.x86_64.json"
+  sed -i 's|/usr/lib/mangohud/lib32/|/usr/lib32/mangohud/|' \
+    "${pkgdir}/usr/share/vulkan/implicit_layer.d/MangoHud.x86.json"
+
+  install -Dm644 "${pkgdir}/usr/share/doc/mangohud/LICENSE" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 "${pkgdir}/usr/share/doc/mangohud/LICENSE.libcap" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.libcap"
+  install -Dm644 "${pkgdir}/usr/share/doc/mangohud/compact-dual-fps.conf" \
+    "${pkgdir}/etc/MangoHud.conf"
+}
