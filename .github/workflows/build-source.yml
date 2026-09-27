@@ -1,41 +1,55 @@
 name: Build source tars
+
 on:
   workflow_dispatch:
   release:
     types: [published]
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v3
-      - name: Run build-source.sh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -x
-          sudo apt update
-          source ./build_deps.sh
-          DEPS_NO_I386="$(printf '%s' "$DEPS_DEBIAN" \
-            | tr ',' '\n' \
-            | grep -v ':i386' \
-            | tr '\n' ' ')"
-          sudo apt -o Acquire::Queue-Mode=access -y install \
-            $DEPS_NO_I386 \
-            hub
-          ./build-source.sh
-          assets=()
-          for asset in ./MangoHud-*-Source*.tar.*; do
-            assets+=("-a" "$asset")
-          done
-          tag_name="${GITHUB_REF##*/}"
-          hub release edit "${assets[@]}" -m "" "$tag_name"
-          #hub release create "${assets[@]}" -m "$tag_name" "$tag_name"
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
+      - uses: actions/checkout@v4
         with:
-          name: MangoHud-${{steps.git-vars.outputs.artifact-metadata}}
-          path: ${{runner.workspace}}/MangoHud/build/MangoHud-*tar.gz
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          fetch-depth: 0
+
+      - name: Install source build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          source ./build_deps.sh
+          IFS=, read -ra deps <<< "$DEPS_DEBIAN"
+          filtered=()
+          for dep in "${deps[@]}"; do
+            [[ "$dep" == *:i386 ]] || filtered+=("$dep")
+          done
+          sudo apt-get -o Acquire::Queue-Mode=access install -y \
+            "${filtered[@]}" appstream pkgconf gh
+          minimum="$(sed -n "s/.*meson_version:[[:space:]]*'>=\([^']*\)'.*/\1/p" meson.build)"
+          python3 -m pip install --user --break-system-packages "meson>=$minimum"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build source archives
+        shell: bash
+        run: ./build-source.sh
+
+      - name: Upload source archives to release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "${{ github.event.release.tag_name || github.ref_name }}" \
+            ./MangoHud-*-Source*.tar.xz --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MangoHud-source-${{ github.run_id }}
+          path: MangoHud-*-Source*.tar.xz
           retention-days: 30

@@ -1,58 +1,154 @@
 name: Build release package
+
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag on master to build and release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v3
-      - name: Install build tools
-        run: |
-          set -x
-          sudo dpkg --add-architecture i386
-          sudo apt update
-          source ./build_deps.sh
-          DEPS="$(printf '%s' "$DEPS_DEBIAN" | tr ',' ' ')"
-          sudo apt -o Acquire::Queue-Mode=access -y install \
-            $DEPS \
-            gh \
-            pkgconf
-          command -v glslangValidator && glslangValidator --version
-          command -v pkg-config && pkg-config --version
-      - name: Prepare Artifact Git Info
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Verify release ref
         shell: bash
         run: |
-          echo "##[set-output name=branch;]${GITHUB_REF#refs/heads/}"
-          ARTIFACT_NAME="commit-$(git rev-parse --short "$GITHUB_SHA")"
-          if [ ${{ github.event_name == 'pull_request' }} ]; then
-            echo "##[set-output name=short-sha;]$(git rev-parse --short "${{ github.event.pull_request.head.sha }}")"
-            if [ ! -z "${{ github.event.pull_request.number }}" ]; then
-              ARTIFACT_NAME="pr-${{ github.event.pull_request.number }}-commit-$(git rev-parse --short "${{ github.event.pull_request.head.sha }}")"
-            fi
-          else
-            echo "##[set-output name=short-sha;]$(git rev-parse --short "$GITHUB_SHA")"
-          fi
-          echo "##[set-output name=artifact-metadata;]$ARTIFACT_NAME"
-      - name: Build and package
-        run: |
-          ./build-source.sh
-          ./build.sh build -Dwerror=true package release
-      - name: Upload assets to release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag_name="${GITHUB_REF##*/}"
-          for pkg in ./build/*.tar.*; do
-            gh release upload "$tag_name" "$pkg" --clobber
-          done
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-marukooh\.[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "refs/tags/$TAG")"
+          ! gh release view "$TAG" >/dev/null 2>&1
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          source ./build_deps.sh
+          IFS=, read -ra deps <<< "$DEPS_DEBIAN"
+          sudo apt-get -o Acquire::Queue-Mode=access install -y \
+            "${deps[@]}" \
+            libdrm-dev:i386 libx11-dev:i386 libdbus-1-dev:i386 \
+            appstream pkgconf gh
+          minimum="$(sed -n "s/.*meson_version:[[:space:]]*'>=\([^']*\)'.*/\1/p" meson.build)"
+          python3 -m pip install --user --break-system-packages "meson>=$minimum"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build and test x86_64
+        shell: bash
+        run: |
+          set -euo pipefail
+          meson setup build/release64 --prefix /usr --libdir lib/mangohud/lib64 \
+            -Dappend_libdir_mangohud=false -Dwith_server=false \
+            -Dwith_mangohud_next=false -Dtests=enabled -Dwerror=true
+          meson compile -C build/release64
+          meson test -C build/release64 --print-errorlogs
+
+      - name: Build static i686 libcap
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/libcap-2.78.tar.xz"
+          curl --fail --location --silent --show-error \
+            https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.78.tar.xz \
+            --output "$archive"
+          echo "0d621e562fd932ccf67b9660fb018e468a683d7b827541df27813228c996bb11  $archive" \
+            | sha256sum --check
+          tar -xf "$archive" -C build
+          make -C build/libcap-2.78/libcap \
+            CC='gcc -m32' BUILD_CC=gcc SHARED=no PTHREADS=no libcap.a
+          mkdir -p build/libcap-pc
+          cat > build/libcap-pc/libcap.pc <<EOF
+          prefix=$PWD/build/libcap-2.78
+          libdir=\${prefix}/libcap
+          includedir=\${prefix}/libcap/include
+          Name: libcap
+          Description: Local static i686 libcap build
+          Version: 2.78
+          Libs: -L\${libdir} -l:libcap.a
+          Cflags: -I\${includedir}
+          EOF
+
+      - name: Build and test i686
+        shell: bash
+        env:
+          CC: gcc -m32
+          CXX: g++ -m32
+          LDFLAGS: -m32
+          PKG_CONFIG_PATH: ${{ github.workspace }}/build/libcap-pc:/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig
+        run: |
+          set -euo pipefail
+          meson setup build/release32 --prefix /usr --libdir lib/mangohud/lib32 \
+            -Dappend_libdir_mangohud=false -Dwith_server=false \
+            -Dwith_mangohud_next=false -Dtests=enabled -Dwerror=true
+          meson compile -C build/release32
+          meson test -C build/release32 --print-errorlogs
+
+      - name: Package binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$PWD/build/release-stage"
+          meson install -C build/release32 --destdir "$stage" --no-rebuild
+          meson install -C build/release64 --destdir "$stage" --no-rebuild
+          install -Dm644 profiles/compact-dual-fps.conf \
+            "$stage/usr/share/doc/mangohud/compact-dual-fps.conf"
+          install -Dm644 LICENSE "$stage/usr/share/doc/mangohud/LICENSE"
+          install -Dm644 build/libcap-2.78/License \
+            "$stage/usr/share/doc/mangohud/LICENSE.libcap"
+          file "$stage/usr/lib/mangohud/lib32/libMangoHud.so" \
+            "$stage/usr/lib/mangohud/lib64/libMangoHud.so"
+          ldd -r "$stage/usr/lib/mangohud/lib32/libMangoHud.so" \
+            | tee build/ldd-i686.txt
+          ! grep -Eq 'not found|undefined symbol' build/ldd-i686.txt
+          archive="MangoHud-$TAG-linux-x86_64-i686.tar.gz"
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+            -C "$stage" -czf "$archive" .
+          sha256sum "$archive" > "$archive.sha256"
+
+      - name: Publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="MangoHud-$TAG-linux-x86_64-i686.tar.gz"
+          cat > release-notes.md <<'EOF'
+          Personal MangoHud build with automatic Vulkan frame-generation reporting, live FPS metric resets, used/total memory display, and a compact HUD profile.
+
+          The binary archive contains classic MangoHud Vulkan and OpenGL libraries for x86_64 and i686. Its `usr/` directory is laid out for installation under `/usr`. The compact profile is at `usr/share/doc/mangohud/compact-dual-fps.conf`.
+
+          Launch Steam games with `mangohud %command%` after installation. Set `base_fps=0` to disable dual-FPS reporting.
+          EOF
+          gh release create "$TAG" "$archive" "$archive.sha256" \
+            --title "MangoHud $TAG" --notes-file release-notes.md --verify-tag
+
+      - name: Build source archives
+        shell: bash
+        run: gh workflow run build-source.yml --ref "$TAG"
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: MangoHud-${{steps.git-vars.outputs.artifact-metadata}}
-          path: ${{runner.workspace}}/MangoHud/build/MangoHud-*tar.gz
+          name: MangoHud-${{ inputs.tag }}-linux
+          path: |
+            MangoHud-*.tar.gz
+            MangoHud-*.tar.gz.sha256
           retention-days: 30
