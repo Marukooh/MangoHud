@@ -145,6 +145,10 @@ jobs:
         shell: bash
         run: gh workflow run build-source.yml --ref "$TAG"
 
+      - name: Build Arch package
+        shell: bash
+        run: gh workflow run arch-package.yml --ref master -f tag="$TAG"
+
       - uses: actions/upload-artifact@v4
         with:
           name: MangoHud-${{ inputs.tag }}-linux

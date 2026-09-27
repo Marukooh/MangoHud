@@ -1,44 +1,63 @@
-name: arch package
+name: Build Arch package
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing fork release tag to package
+        required: true
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
-  build-arch-pkg:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-24.04
     container:
       image: archlinux:latest
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: set git global safe directory
+      - name: Install build tools
+        run: pacman -Syu --noconfirm base-devel git github-cli sudo namcap
+
+      - uses: actions/checkout@v4
+
+      - name: Verify release and package version
+        shell: bash
         run: |
-          pacman -Syu git --noconfirm
-          git config --global --add safe.directory $(realpath .)
-      - uses: actions/checkout@v3
-      - name: Install prerequisites
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-marukooh\.[0-9]+$ ]]
+          package_tag="$(bash -c 'source pkgbuild/marukooh-bin/PKGBUILD; printf "%s" "$_tag"')"
+          test "$TAG" = "$package_tag"
+          gh release view "$TAG" >/dev/null
+
+      - name: Build and inspect package
+        shell: bash
         run: |
-          echo "ParallelDownloads = 10" >> /etc/pacman.conf
-          echo "\n" && echo "[multilib]" >> /etc/pacman.conf
-          echo "Include = /etc/pacman.d/mirrorlist" >> /etc/pacman.conf
-          pacman -Syu base-devel sudo meson python-mako glslang hub python-numpy python-matplotlib --noconfirm
-      - name: makepkg
-        run: |
+          set -euo pipefail
           useradd -m builduser
-          echo "builduser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/builduser
+          install -d -o builduser -g builduser /tmp/mangohud-package
+          cp pkgbuild/marukooh-bin/PKGBUILD pkgbuild/marukooh-bin/.SRCINFO /tmp/mangohud-package/
+          chown builduser:builduser /tmp/mangohud-package/* /tmp/mangohud-package/.SRCINFO
+          printf 'builduser ALL=(ALL) NOPASSWD: /usr/bin/pacman\n' > /etc/sudoers.d/builduser
           chmod 0440 /etc/sudoers.d/builduser
-          chown -R builduser:builduser pkgbuild
-          cd pkgbuild
-          pkgver=$(git describe --tags | sed -r 's/^v//;s/([^-]*-g)/r\1/;s/-/./g')
-          sed -i "s/pkgver=.*/pkgver=$pkgver/g" PKGBUILD
-          sudo -u builduser -- sh -c "makepkg -fsCc --noconfirm"
-      - name: Edit release and add files
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -x
-          assets=()
-          for pkg in ./pkgbuild/*mangohud*.tar.zst;
-            do echo $pkg;
-            assets+=("-a" "$pkg")
-          done;
-          tag_name="${GITHUB_REF##*/}"
-          hub release edit "${assets[@]}" -m "" "$tag_name"
+          sudo -u builduser bash -c 'cd /tmp/mangohud-package && makepkg --syncdeps --noconfirm'
+          namcap /tmp/mangohud-package/*.pkg.tar.zst || true
+          cp /tmp/mangohud-package/*.pkg.tar.zst .
+          sha256sum ./*.pkg.tar.zst > mangohud-marukooh-bin.sha256
+
+      - name: Publish package asset
+        shell: bash
+        run: gh release upload "$TAG" ./*.pkg.tar.zst mangohud-marukooh-bin.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mangohud-marukooh-bin-${{ inputs.tag }}
+          path: |
+            *.pkg.tar.zst
+            mangohud-marukooh-bin.sha256
+          retention-days: 30
