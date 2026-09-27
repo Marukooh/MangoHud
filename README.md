@@ -375,6 +375,8 @@ Parameters that are enabled by default have to be explicitly disabled. These (cu
 | `device_battery`                   | Display wireless device battery percent. Currently supported arguments `gamepad` and `mouse` e.g `device_battery=gamepad,mouse` |
 | `display_server`                   | Display the current display session (e.g. X11 or wayland)                             |
 | `dynamic_frame_timing`             | This changes frame_timing y-axis to correspond with the current maximum and minimum frametime instead of being a static 0-50 |
+| `duration`                         | Display elapsed time since the application started                                   |
+| `dx_api`                           | Label DirectX versions used through DXVK or VKD3D-Proton                             |
 | `engine_short_names`               | Display a short version of the used engine (e.g. `OGL` instead of `OpenGL`)           |
 | `engine_version`                   | Display OpenGL or vulkan and vulkan-based render engine's version                     |
 | `exec`                             | Display output of bash command in next column, e.g. `custom_text=/home` , `exec=df -h /home \| tail -n 1`. Only works with `legacy_layout=0` |
@@ -422,6 +424,10 @@ Parameters that are enabled by default have to be explicitly disabled. These (cu
 | `gpu_list`                         | List GPUs to display `gpu_list=0,1`                                                   |
 | `gpu_efficiency`                   | Display GPU efficiency in frames per joule                                            |
 | `gpu_power_limit`                  | Display GPU power limit                                                               |
+| `graphs`                           | Display selected graphs, separated by commas                                         |
+| `help`                             | Print the available configuration options to stdout                                 |
+| `hide_engine_names`                | Label the frame rate FPS instead of naming the graphics API                         |
+| `hide_fps_superscript`             | Hide the graphics API superscript beside the frame rate                             |
 | `hide_fsr_sharpness`               | Hides the sharpness info for the `fsr` option (only available in gamescope)           |
 | `histogram`                        | Change FPS graph to histogram                                                         |
 | `horizontal`                       | Display Mangohud in a horizontal position                                             |
