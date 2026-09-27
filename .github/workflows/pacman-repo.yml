@@ -1,0 +1,95 @@
+name: Publish pacman repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag containing the Arch package
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pacman-repository
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux:latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      SIGNING_KEY: ${{ secrets.MANGOHUD_PACMAN_GPG_KEY }}
+      EXPECTED_FINGERPRINT: 416B220E18F6374F0B59D8D58D9DED2EA3133F5E
+    steps:
+      - name: Install repository tools
+        run: pacman -Syu --noconfirm github-cli gnupg pacman-contrib
+
+      - name: Assemble signed repository
+        id: assemble
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-marukooh\.[0-9]+$ ]]
+          test -n "$SIGNING_KEY"
+          install -d -m 700 "$RUNNER_TEMP/gnupg"
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          printf '%s\n' "$SIGNING_KEY" | gpg --batch --import
+          fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" {print $10; exit}')"
+          test "$fingerprint" = "$EXPECTED_FINGERPRINT"
+
+          package="$(gh release view "$TAG" --json assets --jq '.assets[].name | select(test("^mangohud-marukooh-bin-[0-9].*-x86_64[.]pkg[.]tar[.]zst$"))')"
+          test -n "$package"
+          [[ "$package" != *$'\n'* ]]
+          install -d site/x86_64
+          gh release download "$TAG" --pattern "$package" --dir site/x86_64
+          gpg --batch --yes --local-user "$fingerprint" --detach-sign \
+            --output "site/x86_64/$package.sig" "site/x86_64/$package"
+          repo-add --sign --key "$fingerprint" \
+            site/x86_64/mangohud-marukooh.db.tar.gz "site/x86_64/$package"
+
+          # GitHub Pages does not publish repository symlinks as package files.
+          for link in site/x86_64/*; do
+            if test -L "$link"; then
+              cp --dereference "$link" "$link.copy"
+              rm "$link"
+              mv "$link.copy" "$link"
+            fi
+          done
+          gpg --batch --armor --export "$fingerprint" > site/mangohud-marukooh-key.asc
+          cat > site/index.html <<'EOF'
+          <!doctype html>
+          <html lang="en"><meta charset="utf-8"><title>MangoHud Arch repository</title>
+          <body><h1>MangoHud Arch repository</h1>
+          <p>Signed Arch packages for the Marukooh MangoHud fork.</p>
+          <p>Signing key fingerprint: <code>416B220E18F6374F0B59D8D58D9DED2EA3133F5E</code></p>
+          <pre>curl -fsSL https://marukooh.github.io/MangoHud/mangohud-marukooh-key.asc | sudo pacman-key --add -
+          sudo pacman-key --lsign-key 416B220E18F6374F0B59D8D58D9DED2EA3133F5E</pre>
+          <p>Add this repository to <code>/etc/pacman.conf</code>:</p>
+          <pre>[mangohud-marukooh]
+          SigLevel = Required DatabaseRequired
+          Server = https://marukooh.github.io/MangoHud/x86_64</pre>
+          <p>Install with <code>sudo pacman -S mangohud-marukooh-bin</code>.</p>
+          </body></html>
+          EOF
+          gpg --batch --verify site/x86_64/mangohud-marukooh.db.sig \
+            site/x86_64/mangohud-marukooh.db
+          gpg --batch --verify "site/x86_64/$package.sig" "site/x86_64/$package"
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

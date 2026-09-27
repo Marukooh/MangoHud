@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   build:
@@ -56,6 +57,10 @@ jobs:
       - name: Publish package asset
         shell: bash
         run: gh release upload "$TAG" ./*.pkg.tar.zst mangohud-marukooh-bin.sha256
+
+      - name: Publish pacman repository
+        shell: bash
+        run: gh workflow run pacman-repo.yml --ref master -f tag="$TAG"
 
       - uses: actions/upload-artifact@v4
         with:
